@@ -146,7 +146,7 @@ export class ProofApp implements Component {
     const errors = checks.filter((check) => check.severity === 'error').length;
     const warnings = checks.filter((check) => check.severity === 'warning').length;
     const selectedVersion = document.versions.find((version) => version.id === store.compareVersionId);
-    const diff = selectedVersion ? compareVersion(document, selectedVersion) : [];
+    const diff = selectedVersion ? compareVersion(document, selectedVersion) : null;
 
     return m('div.app-shell', [
       m('header.topbar', [
@@ -354,22 +354,30 @@ export class ProofApp implements Component {
           ]),
         ]),
       ]),
-      selectedVersion && m('div.diff-overlay', { onclick: () => { store.compareVersionId = ''; m.redraw(); } }, [
+      selectedVersion && diff && m('div.diff-overlay', { onclick: () => { store.compareVersionId = ''; m.redraw(); } }, [
         m('section.diff-dialog', { onclick: (event: Event) => event.stopPropagation() }, [
           m('header.diff-head', [
             m('div', [m('span.eyebrow', 'VERSION DIFF'), m('h2', `${selectedVersion.name} ↔ 当前版本`)]),
             m('button.delete', { onclick: () => { store.compareVersionId = ''; m.redraw(); } }),
           ]),
           m('div.diff-summary', [
-            m('span.tag.is-danger', `删除 ${diff.filter((item) => item.kind === 'removed').length}`),
-            m('span.tag.is-success', `新增 ${diff.filter((item) => item.kind === 'added').length}`),
-            m('span.tag.is-warning', `修改 ${diff.filter((item) => item.kind === 'changed').length}`),
-            m('span.tag.is-light', `未变 ${diff.filter((item) => item.kind === 'same').length}`),
+            m('span.tag.is-success', `新增 ${diff.counts.added}`),
+            m('span.tag.is-danger', `移除 ${diff.counts.removed}`),
+            m('span.tag.is-info', `移动 ${diff.counts.moved}`),
+            m('span.tag.is-warning', `修改 ${diff.counts.changed}`),
+            m('span.tag.is-light', `未变 ${diff.counts.same}`),
+            diff.goal && m('span.tag.is-link', '目标公式已变更'),
+          ]),
+          diff.goal && m('div.diff-goal', [
+            m('span.diff-goal-label', '证明目标'),
+            m('span.diff-goal-before', renderRichText(`$${diff.goal.before}$`)),
+            m('span.diff-goal-arrow', '→'),
+            m('span.diff-goal-after', renderRichText(`$${diff.goal.after}$`)),
           ]),
           m('div.diff-table', [
             m('div.diff-row.diff-header', [m('span', '位置'), m('span', '旧版本'), m('span', '当前版本')]),
-            ...diff.map((item) => m('div.diff-row', { class: `is-${item.kind}` }, [
-              m('span.diff-label', item.label),
+            ...diff.entries.map((item) => m('div.diff-row', { class: `is-${item.kind}` }, [
+              m('span.diff-label', [item.label, item.detail && m('small.diff-detail', item.detail)]),
               m('span', item.before || '—'),
               m('span', item.after || '—'),
             ])),

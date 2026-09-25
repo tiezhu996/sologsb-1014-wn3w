@@ -1,5 +1,5 @@
 import { redraw } from 'mithril';
-import type { ProofCheck, ProofDocument, ProofStep, ProofVersion } from './types';
+import type { ProofCheck, ProofDiff, ProofDocument, ProofStep, ProofVersion, VersionDiff } from './types';
 
 const STORAGE_KEY = 'sologsb-1014-proof-workspace-v1';
 const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -296,16 +296,61 @@ export function validate(document: ProofDocument): ProofCheck[] {
   return checks;
 }
 
-export function compareVersion(document: ProofDocument, version: ProofVersion) {
-  const result = [];
-  const size = Math.max(document.steps.length, version.steps.length);
-  for (let index = 0; index < size; index += 1) {
-    const before = version.steps[index]?.statement ?? '';
-    const after = document.steps[index]?.statement ?? '';
-    const kind = !before ? 'added' : !after ? 'removed' : before === after ? 'same' : 'changed';
-    result.push({ kind, label: `步骤 ${index + 1}`, before, after } as const);
-  }
-  return result;
+function changedStepFields(before: ProofStep, after: ProofStep): string[] {
+  const fields: string[] = [];
+  if (before.type !== after.type) fields.push('类型');
+  if (before.statement !== after.statement) fields.push('命题');
+  if (before.rule !== after.rule) fields.push('规则');
+  if (before.references.join('') !== after.references.join('')) fields.push('引用');
+  if (before.note !== after.note) fields.push('旁注');
+  if (before.counterexample !== after.counterexample) fields.push('反例');
+  if (before.alternative !== after.alternative) fields.push('替代分支');
+  return fields;
+}
+
+export function compareVersion(document: ProofDocument, version: ProofVersion): VersionDiff {
+  const beforeSteps = version.steps;
+  const afterSteps = document.steps;
+  const beforeIndex = new Map(beforeSteps.map((step, index) => [step.id, index]));
+  const afterIndex = new Map(afterSteps.map((step, index) => [step.id, index]));
+  const entries: { sortKey: number; diff: ProofDiff }[] = [];
+
+  beforeSteps.forEach((step, index) => {
+    if (afterIndex.has(step.id)) return;
+    let sortKey = afterSteps.length + index / Math.max(1, beforeSteps.length);
+    for (let next = index + 1; next < beforeSteps.length; next += 1) {
+      const anchor = afterIndex.get(beforeSteps[next].id);
+      if (anchor !== undefined) { sortKey = anchor - 0.5; break; }
+    }
+    entries.push({ sortKey, diff: { kind: 'removed', label: `步骤 ${index + 1}`, before: step.statement, after: '' } });
+  });
+
+  afterSteps.forEach((step, after) => {
+    const before = beforeIndex.get(step.id);
+    if (before === undefined) {
+      entries.push({ sortKey: after, diff: { kind: 'added', label: `步骤 ${after + 1}`, before: '', after: step.statement } });
+      return;
+    }
+    const previous = beforeSteps[before];
+    const position = before === after ? `步骤 ${after + 1}` : `步骤 ${before + 1} → ${after + 1}`;
+    const fields = changedStepFields(previous, step);
+    if (fields.length) {
+      entries.push({ sortKey: after, diff: { kind: 'changed', label: position, before: previous.statement, after: step.statement, detail: `改动：${fields.join('、')}` } });
+    } else if (before !== after) {
+      entries.push({ sortKey: after, diff: { kind: 'moved', label: position, before: previous.statement, after: step.statement, detail: '仅位置变化，内容未改' } });
+    } else {
+      entries.push({ sortKey: after, diff: { kind: 'same', label: position, before: previous.statement, after: step.statement } });
+    }
+  });
+
+  const counts: VersionDiff['counts'] = { same: 0, added: 0, removed: 0, moved: 0, changed: 0 };
+  entries.forEach((entry) => { counts[entry.diff.kind] += 1; });
+
+  return {
+    entries: entries.sort((a, b) => a.sortKey - b.sortKey).map((entry) => entry.diff),
+    goal: version.goal !== document.goal ? { before: version.goal, after: document.goal } : null,
+    counts,
+  };
 }
 
 export function createId(prefix: string): string {

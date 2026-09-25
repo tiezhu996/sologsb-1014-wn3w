@@ -39,9 +39,18 @@ export interface ProofCheck {
   stepId?: string;
 }
 
+export type ProofDiffKind = 'same' | 'added' | 'removed' | 'moved' | 'changed';
+
 export interface ProofDiff {
-  kind: 'same' | 'added' | 'removed' | 'changed';
+  kind: ProofDiffKind;
   label: string;
   before: string;
   after: string;
+  detail?: string;
+}
+
+export interface VersionDiff {
+  entries: ProofDiff[];
+  goal: { before: string; after: string } | null;
+  counts: Record<ProofDiffKind, number>;
 }

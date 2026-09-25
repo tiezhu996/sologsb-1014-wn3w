@@ -190,7 +190,7 @@ kbd { padding: 2px 5px; border: 1px solid #c8d1da; border-bottom-width: 2px; bor
 .diff-head h2 { margin: 3px 0 0; font-size: 18px; }
 .diff-summary { padding: 11px 20px; display: flex; gap: 6px; border-bottom: 1px solid var(--line); }
 .diff-table { overflow: auto; }
-.diff-row { display: grid; grid-template-columns: 72px 1fr 1fr; min-height: 48px; border-bottom: 1px solid #edf0f3; }
+.diff-row { display: grid; grid-template-columns: 108px 1fr 1fr; min-height: 48px; border-bottom: 1px solid #edf0f3; }
 .diff-row > span { padding: 10px 12px; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
 .diff-row > span + span { border-left: 1px solid #edf0f3; }
 .diff-row.diff-header { position: sticky; top: 0; color: #667386; background: #f5f7fa; font-size: 10px; font-weight: 700; }
@@ -198,7 +198,14 @@ kbd { padding: 2px 5px; border: 1px solid #c8d1da; border-bottom-width: 2px; bor
 .diff-row.is-removed span:nth-child(2) { background: #fff0f2; }
 .diff-row.is-changed span:nth-child(2) { background: #fff8e8; }
 .diff-row.is-changed span:nth-child(3) { background: #eef8f3; }
+.diff-row.is-moved span:nth-child(2), .diff-row.is-moved span:nth-child(3) { background: #eef4ff; }
 .diff-label { color: #657385; background: #fafbfc; }
+.diff-detail { display: block; margin-top: 4px; color: #8a94a6; font-size: 10px; line-height: 1.4; }
+.diff-goal { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 12px 20px; border-bottom: 1px solid var(--line); background: #fdf9ef; font-size: 13px; }
+.diff-goal-label { padding: 3px 8px; border-radius: 5px; color: #6b5a1e; background: #f4e9c8; font-size: 10px; font-weight: 700; }
+.diff-goal-before { padding: 4px 8px; border-radius: 6px; background: #fff0f2; }
+.diff-goal-after { padding: 4px 8px; border-radius: 6px; background: #effaf5; }
+.diff-goal-arrow { color: #8a94a6; }
 .toast-notification { position: fixed; right: 24px; bottom: 24px; z-index: 80; padding: 11px 16px; border-radius: 9px; color: #fff; background: #173f60; box-shadow: 0 10px 30px rgba(17,47,70,.25); font-size: 12px; }
 
 @media (max-width: 1220px) {
