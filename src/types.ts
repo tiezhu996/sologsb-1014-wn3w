@@ -39,9 +39,26 @@ export interface ProofCheck {
   stepId?: string;
 }
 
-export interface ProofDiff {
-  kind: 'same' | 'added' | 'removed' | 'changed';
-  label: string;
+export type StepDiffKind = 'same' | 'added' | 'removed' | 'moved' | 'modified';
+
+export interface StepDiff {
+  kind: StepDiffKind;
+  stepId: string;
+  before: ProofStep | null;
+  after: ProofStep | null;
+  beforeIndex: number;
+  afterIndex: number;
+  fields: string[];
+}
+
+export interface GoalDiff {
+  changed: boolean;
   before: string;
   after: string;
+}
+
+export interface VersionDiff {
+  steps: StepDiff[];
+  goal: GoalDiff;
+  counts: Record<Exclude<StepDiffKind, 'same'>, number>;
 }

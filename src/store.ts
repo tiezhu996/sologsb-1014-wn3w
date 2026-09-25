@@ -1,5 +1,5 @@
 import { redraw } from 'mithril';
-import type { ProofCheck, ProofDocument, ProofStep, ProofVersion } from './types';
+import type { GoalDiff, ProofCheck, ProofDocument, ProofStep, ProofVersion, StepDiff, StepDiffKind, VersionDiff } from './types';
 
 const STORAGE_KEY = 'sologsb-1014-proof-workspace-v1';
 const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -296,16 +296,165 @@ export function validate(document: ProofDocument): ProofCheck[] {
   return checks;
 }
 
-export function compareVersion(document: ProofDocument, version: ProofVersion) {
-  const result = [];
-  const size = Math.max(document.steps.length, version.steps.length);
-  for (let index = 0; index < size; index += 1) {
-    const before = version.steps[index]?.statement ?? '';
-    const after = document.steps[index]?.statement ?? '';
-    const kind = !before ? 'added' : !after ? 'removed' : before === after ? 'same' : 'changed';
-    result.push({ kind, label: `步骤 ${index + 1}`, before, after } as const);
+const DIFF_FIELD_LABELS: Array<{ key: keyof ProofStep; label: string }> = [
+  { key: 'type', label: '类型' },
+  { key: 'statement', label: '内容' },
+  { key: 'rule', label: '推理规则' },
+  { key: 'references', label: '引用' },
+  { key: 'note', label: '旁注' },
+  { key: 'counterexample', label: '反例' },
+  { key: 'alternative', label: '替代分支' },
+];
+
+function sameReferenceSet(before: string[], after: string[]): boolean {
+  if (before.length !== after.length) return false;
+  const set = new Set(before);
+  return after.every((id) => set.has(id));
+}
+
+function changedFields(before: ProofStep, after: ProofStep): string[] {
+  return DIFF_FIELD_LABELS.filter(({ key }) => {
+    if (key === 'references') return !sameReferenceSet(before.references, after.references);
+    return before[key] !== after[key];
+  }).map(({ label }) => label);
+}
+
+/**
+ * 按步骤自身的 id 对齐两个版本：先用最长公共子序列识别原位保留的步骤，
+ * 再把剩余同 id 的新旧步骤配对为移动；只在新版本出现的为新增，只在旧
+ * 版本出现的为移除。保留步骤仅位置变动为移动，内容字段变动为修改
+ * （既移动又修改仍归为修改，但保留位置信息）。
+ */
+export function compareVersion(document: ProofDocument, version: ProofVersion): VersionDiff {
+  const beforeSteps = version.steps;
+  const afterSteps = document.steps;
+
+  // LCS 动态规划，按 id 判定同一步骤
+  const rows = beforeSteps.length;
+  const cols = afterSteps.length;
+  const lcs: number[][] = Array.from({ length: rows + 1 }, () => new Array<number>(cols + 1).fill(0));
+  for (let i = rows - 1; i >= 0; i -= 1) {
+    for (let j = cols - 1; j >= 0; j -= 1) {
+      lcs[i][j] = beforeSteps[i].id === afterSteps[j].id
+        ? lcs[i + 1][j + 1] + 1
+        : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
   }
-  return result;
+
+  type Keep = { op: 'keep'; beforeIndex: number; afterIndex: number; paired: boolean };
+  type Drop = { op: 'remove'; beforeIndex: number };
+  type Gain = { op: 'add'; afterIndex: number };
+
+  // 回溯 LCS，得到原位保留以及未匹配的删除/新增
+  const keeps: Keep[] = [];
+  const removes: Drop[] = [];
+  const adds: Gain[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < rows && j < cols) {
+    if (beforeSteps[i].id === afterSteps[j].id) {
+      keeps.push({ op: 'keep', beforeIndex: i, afterIndex: j, paired: false });
+      i += 1;
+      j += 1;
+    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+      removes.push({ op: 'remove', beforeIndex: i });
+      i += 1;
+    } else {
+      adds.push({ op: 'add', afterIndex: j });
+      j += 1;
+    }
+  }
+  while (i < rows) {
+    removes.push({ op: 'remove', beforeIndex: i });
+    i += 1;
+  }
+  while (j < cols) {
+    adds.push({ op: 'add', afterIndex: j });
+    j += 1;
+  }
+
+  // 未匹配的删除与新增按 id 再配对，识别为移动
+  const pairedAdds = new Set<number>();
+  const pairedRemoves = new Set<number>();
+  removes.forEach((drop, ri) => {
+    const ai = adds.findIndex((gain, index) => !pairedAdds.has(index) && afterSteps[gain.afterIndex].id === beforeSteps[drop.beforeIndex].id);
+    if (ai >= 0) {
+      pairedAdds.add(ai);
+      pairedRemoves.add(ri);
+      keeps.push({ op: 'keep', beforeIndex: drop.beforeIndex, afterIndex: adds[ai].afterIndex, paired: true });
+    }
+  });
+  const finalRemoves = removes.filter((_, index) => !pairedRemoves.has(index));
+  const finalAdds = adds.filter((_, index) => !pairedAdds.has(index));
+
+  // 以新版本顺序为主轴合并，被删除步骤插到其后第一个新版本项之前，保持阅读顺序
+  const afterOrder: Array<Keep | Gain> = [
+    ...keeps,
+    ...finalAdds,
+  ].sort((a, b) => a.afterIndex - b.afterIndex);
+
+  type Aligned = Keep | Gain | Drop;
+  const aligned: Aligned[] = [];
+  let removeCursor = 0;
+  const flushRemovesBefore = (beforeIndex: number) => {
+    finalRemoves.slice(removeCursor).forEach((drop) => {
+      if (drop.beforeIndex < beforeIndex) {
+        aligned.push(drop);
+        removeCursor += 1;
+      }
+    });
+  };
+  for (const item of afterOrder) {
+    const anchor = 'beforeIndex' in item ? item.beforeIndex : rows;
+    flushRemovesBefore(anchor);
+    aligned.push(item);
+  }
+  while (removeCursor < finalRemoves.length) {
+    aligned.push(finalRemoves[removeCursor]);
+    removeCursor += 1;
+  }
+
+  // 保留步骤若位移完全由前面的新增/删除造成，则不算真正移动
+  const removedBefore = (beforeIndex: number) => finalRemoves.filter((drop) => drop.beforeIndex < beforeIndex).length;
+  const addedBefore = (afterIndex: number) => finalAdds.filter((gain) => gain.afterIndex < afterIndex).length;
+
+  const diffs: StepDiff[] = aligned.map((item) => {
+    if (item.op === 'add') {
+      const after = afterSteps[item.afterIndex];
+      return { kind: 'added', stepId: after.id, before: null, after, beforeIndex: -1, afterIndex: item.afterIndex, fields: [] };
+    }
+    if (item.op === 'remove') {
+      const before = beforeSteps[item.beforeIndex];
+      return { kind: 'removed', stepId: before.id, before, after: null, beforeIndex: item.beforeIndex, afterIndex: -1, fields: [] };
+    }
+    const before = beforeSteps[item.beforeIndex];
+    const after = afterSteps[item.afterIndex];
+    const fields = changedFields(before, after);
+    const expectedAfterIndex = item.beforeIndex - removedBefore(item.beforeIndex) + addedBefore(item.afterIndex);
+    const relocated = item.paired || item.afterIndex !== expectedAfterIndex;
+    let kind: StepDiffKind;
+    if (fields.length) {
+      kind = 'modified';
+    } else if (relocated) {
+      kind = 'moved';
+    } else {
+      kind = 'same';
+    }
+    return { kind, stepId: before.id, before, after, beforeIndex: item.beforeIndex, afterIndex: item.afterIndex, fields };
+  });
+
+  const counts: VersionDiff['counts'] = { added: 0, removed: 0, moved: 0, modified: 0 };
+  diffs.forEach((diff) => {
+    if (diff.kind !== 'same') counts[diff.kind] += 1;
+  });
+
+  const goal: GoalDiff = {
+    changed: version.goal !== document.goal,
+    before: version.goal,
+    after: document.goal,
+  };
+
+  return { steps: diffs, goal, counts };
 }
 
 export function createId(prefix: string): string {

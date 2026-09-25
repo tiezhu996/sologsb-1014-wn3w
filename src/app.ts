@@ -1,7 +1,7 @@
 import m, { type Component } from 'mithril';
 import katex from 'katex';
 import { compareVersion, ProofStore, RULES } from './store';
-import type { ProofDocument, ProofStep } from './types';
+import type { ProofDocument, ProofStep, StepDiff } from './types';
 
 const store = new ProofStore();
 
@@ -44,6 +44,40 @@ function renderRichText(text: string): m.Children {
 function shortId(id: string): string {
   return id.replace(/^step-/, '').slice(-4).toUpperCase();
 }
+
+function referenceLabels(step: ProofStep, steps: ProofStep[]): string[] {
+  return step.references.map((id) => {
+    const referenceIndex = steps.findIndex((item) => item.id === id);
+    return referenceIndex >= 0 ? `步骤 ${referenceIndex + 1}` : `已删除 ${shortId(id)}`;
+  });
+}
+
+function renderStepCell(step: ProofStep | null, steps: ProofStep[]): m.Children {
+  if (!step) return m('span.cell-empty', '—');
+  const refs = referenceLabels(step, steps);
+  return m('div.step-cell', [
+    m('div.cell-meta', [
+      m('span.mini-tag', typeLabel[step.type]),
+      m('span.mini-rule', step.rule),
+      m('span.cell-id', `#${shortId(step.id)}`),
+    ]),
+    m('div.cell-statement', renderRichText(step.statement)),
+    m('div.cell-sub', refs.length ? `依据：${refs.join('、')}` : '独立前提'),
+    (step.note || step.counterexample || step.alternative) && m('div.cell-sub.cell-annotations', [
+      step.note && m('span', '旁注'),
+      step.counterexample && m('span', '反例'),
+      step.alternative && m('span', '替代分支'),
+    ]),
+  ]);
+}
+
+const diffKindLabel: Record<StepDiff['kind'], string> = {
+  same: '未变',
+  added: '新增',
+  removed: '移除',
+  moved: '移动',
+  modified: '修改',
+};
 
 function download(name: string, content: string, mime: string): void {
   const link = document.createElement('a');
@@ -146,7 +180,7 @@ export class ProofApp implements Component {
     const errors = checks.filter((check) => check.severity === 'error').length;
     const warnings = checks.filter((check) => check.severity === 'warning').length;
     const selectedVersion = document.versions.find((version) => version.id === store.compareVersionId);
-    const diff = selectedVersion ? compareVersion(document, selectedVersion) : [];
+    const diff = selectedVersion ? compareVersion(document, selectedVersion) : null;
 
     return m('div.app-shell', [
       m('header.topbar', [
@@ -354,25 +388,45 @@ export class ProofApp implements Component {
           ]),
         ]),
       ]),
-      selectedVersion && m('div.diff-overlay', { onclick: () => { store.compareVersionId = ''; m.redraw(); } }, [
+      selectedVersion && diff && m('div.diff-overlay', { onclick: () => { store.compareVersionId = ''; m.redraw(); } }, [
         m('section.diff-dialog', { onclick: (event: Event) => event.stopPropagation() }, [
           m('header.diff-head', [
             m('div', [m('span.eyebrow', 'VERSION DIFF'), m('h2', `${selectedVersion.name} ↔ 当前版本`)]),
             m('button.delete', { onclick: () => { store.compareVersionId = ''; m.redraw(); } }),
           ]),
           m('div.diff-summary', [
-            m('span.tag.is-danger', `删除 ${diff.filter((item) => item.kind === 'removed').length}`),
-            m('span.tag.is-success', `新增 ${diff.filter((item) => item.kind === 'added').length}`),
-            m('span.tag.is-warning', `修改 ${diff.filter((item) => item.kind === 'changed').length}`),
-            m('span.tag.is-light', `未变 ${diff.filter((item) => item.kind === 'same').length}`),
+            m('span.tag.diff-count.is-added', `新增 ${diff.counts.added}`),
+            m('span.tag.diff-count.is-removed', `移除 ${diff.counts.removed}`),
+            m('span.tag.diff-count.is-moved', `移动 ${diff.counts.moved}`),
+            m('span.tag.diff-count.is-modified', `修改 ${diff.counts.modified}`),
+            m('span.tag.diff-count.is-same', `未变 ${diff.steps.filter((item) => item.kind === 'same').length}`),
+            diff.goal.changed && m('span.tag.diff-count.is-goal', '证明目标已改'),
           ]),
           m('div.diff-table', [
-            m('div.diff-row.diff-header', [m('span', '位置'), m('span', '旧版本'), m('span', '当前版本')]),
-            ...diff.map((item) => m('div.diff-row', { class: `is-${item.kind}` }, [
-              m('span.diff-label', item.label),
-              m('span', item.before || '—'),
-              m('span', item.after || '—'),
-            ])),
+            m('div.diff-row.diff-header', [m('div', '步骤'), m('div', `旧版本 · ${selectedVersion.name}`), m('div', '当前版本')]),
+            m('div.diff-row', { class: `is-goal ${diff.goal.changed ? 'is-modified' : 'is-same'}` }, [
+              m('div.diff-label', [m('span.diff-kind', '证明目标')]),
+              m('div', m('div.step-cell', m('div.cell-statement', renderRichText(diff.goal.before ? `$${diff.goal.before}$` : '—')))),
+              m('div', m('div.step-cell', m('div.cell-statement', renderRichText(diff.goal.after ? `$${diff.goal.after}$` : '—')))),
+            ]),
+            ...diff.steps.map((item) => {
+              const positionLabel = item.kind === 'added'
+                ? `新增 · 第 ${item.afterIndex + 1} 步`
+                : item.kind === 'removed'
+                  ? `移除 · 原第 ${item.beforeIndex + 1} 步`
+                  : item.beforeIndex === item.afterIndex
+                    ? `第 ${item.afterIndex + 1} 步`
+                    : `第 ${item.beforeIndex + 1} 步 → 第 ${item.afterIndex + 1} 步`;
+              return m('div.diff-row', { class: `is-${item.kind}` }, [
+                m('div.diff-label', [
+                  m('span.diff-kind', diffKindLabel[item.kind]),
+                  m('span.diff-position', positionLabel),
+                  item.fields.length > 0 && m('span.diff-fields', `改动：${item.fields.join('、')}`),
+                ]),
+                m('div', renderStepCell(item.before, selectedVersion.steps)),
+                m('div', renderStepCell(item.after, document.steps)),
+              ]);
+            }),
           ]),
         ]),
       ]),
